@@ -1,0 +1,120 @@
+"""
+Code Embedding (v1) - CocoIndex app template.
+
+HOW TO USE:
+  1. mkdir -p repos   (first time only - repos/ is gitignored on purpose,
+     see README.md "Project structure" for why)
+  2. cp _template_repo.py.txt repos/<your_repo_name>.py
+  3. Fill in the placeholders marked below (SOURCE_DIR, PG_SCHEMA_NAME,
+     APP_NAME, INCLUDED_PATTERNS, EXCLUDED_PATTERNS). Check your repo's
+     actual language mix and vendor/build dirs first, don't assume:
+       find <repo> -type f -not -path "*/vendor/*" -not -path "*/node_modules/*" \\
+         | sed 's/.*\\.//' | sort | uniq -c | sort -rn | head -20
+  4. cocoindex update repos/<your_repo_name>.py       (or -L for live)
+  5. python repos/<your_repo_name>.py "some query"    (semantic search)
+  6. cocoindex ls                                      (list all registered apps)
+
+Everything else (CodeEmbedding, process_file, process_chunk, query_once, the
+Postgres connection, the embedding model) is shared via common.py - do not
+duplicate it here. common.py also has two tunables worth reviewing per repo
+(see README.md "Chunking" / "Ranking & retrieval quality" for the rationale):
+  CHUNKING_BY_LANGUAGE - chunk_size/overlap per detected language.
+  AUTHORITY_RULES      - path-pattern penalties/bonuses applied at query
+                         time so tests/fixtures/factories rank below real
+                         definitions. Written against common conventions
+                         (tests/, database/factories, *Factory.php,
+                         Models/) - adjust patterns for repos with a
+                         different layout (e.g. Go's *_test.go, JS/TS's
+                         __tests__/, __mocks__/).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import pathlib
+import sys
+from dotenv import load_dotenv
+
+import asyncpg
+from pgvector.asyncpg import register_vector
+
+import cocoindex as coco
+from cocoindex.connectors import localfs, postgres
+from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
+from cocoindex.resources.file import PatternFilePathMatcher
+
+from common import DATABASE_URL, EMBED_MODEL, CodeEmbedding, PG_DB, process_file, query_once
+
+# --- Fill these in for your repo --------------------------------------------
+SOURCE_DIR = pathlib.Path("/absolute/path/to/your/repo")
+PG_SCHEMA_NAME = "your_repo_name"  # unique per repo -> "<schema>.code_embeddings"
+APP_NAME = "YourRepoCodeEmbedding"  # unique per repo
+INCLUDED_PATTERNS = ["**/*.py"]  # match your repo's actual languages
+EXCLUDED_PATTERNS = ["**/.*", "**/vendor", "**/node_modules"]  # + build/vendor dirs
+# -----------------------------------------------------------------------------
+
+TABLE_NAME = "code_embeddings"
+TOP_K = 5
+
+
+@coco.fn
+async def app_main(sourcedir: pathlib.Path) -> None:
+    target_table = await postgres.mount_table_target(
+        PG_DB,
+        table_name=TABLE_NAME,
+        table_schema=await postgres.TableSchema.from_class(
+            CodeEmbedding,
+            primary_key=["id"],
+        ),
+        pg_schema_name=PG_SCHEMA_NAME,
+    )
+    target_table.declare_vector_index(column="embedding")
+
+    files = localfs.walk_dir(
+        sourcedir,
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=INCLUDED_PATTERNS,
+            excluded_patterns=EXCLUDED_PATTERNS,
+        ),
+        live=True,  # source supports live watch; pass -L to `cocoindex update` to actually run live
+    )
+    await coco.mount_each(process_file, files.items(), sourcedir, target_table)
+
+
+app = coco.App(
+    coco.AppConfig(name=APP_NAME),
+    app_main,
+    sourcedir=SOURCE_DIR,
+)
+
+
+# ============================================================================
+# Query demo
+# ============================================================================
+
+
+async def query(initial_query: str | None = None) -> None:
+    embedder = SentenceTransformerEmbedder(EMBED_MODEL)
+    async with asyncpg.create_pool(DATABASE_URL, init=register_vector) as pool:
+        if initial_query is not None:
+            await query_once(
+                pool, embedder, initial_query,
+                pg_schema_name=PG_SCHEMA_NAME, table_name=TABLE_NAME, top_k=TOP_K,
+            )
+            return
+
+        while True:
+            q = input("Enter search query (or Enter to quit): ").strip()
+            if not q:
+                break
+            await query_once(
+                pool, embedder, q,
+                pg_schema_name=PG_SCHEMA_NAME, table_name=TABLE_NAME, top_k=TOP_K,
+            )
+
+
+if __name__ == "__main__":
+    load_dotenv()
+    initial = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else None
+    asyncio.run(query(initial))

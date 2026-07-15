@@ -1,0 +1,23 @@
+# Secrets / local config
+.env
+
+# Project-specific app files (one per indexed repo, e.g. repos/myrepo.py).
+# This workspace (common.py, template, docs) stays generic; what you're
+# actually indexing is local-only. Copy _template_repo.py.txt into repos/
+# to add one - see README.md "Adding another repo to index".
+repos/
+
+# CocoIndex internal state (LMDB) - local tracking db, not the vector data
+cocoindex.db/
+*.mdb
+lock.mdb
+data.mdb
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+
+# OS
+.DS_Store

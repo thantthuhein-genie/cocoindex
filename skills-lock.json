@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "cocoindex": {
+      "source": "cocoindex-io/cocoindex",
+      "sourceType": "github",
+      "skillPath": "skills/cocoindex/SKILL.md",
+      "computedHash": "ef9d4905c3c714eccdcebb45a18f71faf0cc5ad75718a7afb0c9e626808bf263"
+    }
+  }
+}
